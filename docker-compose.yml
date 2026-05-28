@@ -1,0 +1,176 @@
+version: "3.8"
+
+services:
+
+  # ── Reverse proxy (Bonus UI) ───────────────────────────
+  nginx:
+    image: nginx:alpine
+    container_name: medipass-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - ms-agenda-hub
+    networks:
+      - medipass-net
+
+  # ── MS-AgendaHub (servicio principal) ─────────────────
+  ms-agenda-hub:
+    build: ./ms-agenda-hub
+    container_name: ms-agenda-hub
+    command: python run.py
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgresql://medipass:medipass123@postgres-agenda:5432/agenda
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      INSURANCE_SERVICE_URL: http://ms-insurance:8081
+    depends_on:
+      postgres-agenda:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - medipass-net
+
+  # ── MS-Insurance (proxy aseguradora) ──────────────────
+  ms-insurance:
+    build: ./ms-insurance
+    container_name: ms-insurance
+    command: python run.py
+    ports:
+      - "8081:8081"
+    environment:
+      DATABASE_URL: postgresql://medipass:medipass123@postgres-insurance:5432/insurance
+    depends_on:
+      postgres-insurance:
+        condition: service_healthy
+    networks:
+      - medipass-net
+
+  # ── MS-EHRLogger (worker asíncrono) ───────────────────
+  ms-ehr-logger:
+    build: ./ms-ehr-logger
+    container_name: ms-ehr-logger
+    command: python worker.py
+    environment:
+      RABBITMQ_URL:  amqp://guest:guest@rabbitmq:5672/
+      RABBITMQ_QUEUE: agenda.confirmed
+      MONGO_URI:     mongodb://mongodb:27017/
+      MONGO_DB:      hcd
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      mongodb:
+        condition: service_started
+    networks:
+      - medipass-net
+
+  # ── PostgreSQL — Agenda (MS-AgendaHub) ─────────────────
+  postgres-agenda:
+    image: postgres:15-alpine
+    container_name: medipass-postgres-agenda
+    environment:
+      POSTGRES_DB:       agenda
+      POSTGRES_USER:     medipass
+      POSTGRES_PASSWORD: medipass123
+    volumes:
+      - pgdata_agenda:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U medipass -d agenda"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - medipass-net
+
+  # ── PostgreSQL — Insurance (MS-Insurance) ──────────────
+  postgres-insurance:
+    image: postgres:15-alpine
+    container_name: medipass-postgres-insurance
+    environment:
+      POSTGRES_DB:       insurance
+      POSTGRES_USER:     medipass
+      POSTGRES_PASSWORD: medipass123
+    volumes:
+      - pgdata_insurance:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U medipass -d insurance"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - medipass-net
+
+  # ── MongoDB — HCD (MS-EHRLogger) ──────────────────────
+  mongodb:
+    image: mongo:7
+    container_name: medipass-mongodb
+    volumes:
+      - mongodata:/data/db
+    ports:
+      - "27017:27017"
+    networks:
+      - medipass-net
+
+  # ── RabbitMQ — Broker AMQP ────────────────────────────
+  rabbitmq:
+    image: rabbitmq:3.12-management
+    container_name: medipass-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"   # Management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - medipass-net
+
+  # ── Observabilidad ─────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: medipass-prometheus
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    networks:
+      - medipass-net
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: medipass-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    networks:
+      - medipass-net
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: medipass-jaeger
+    ports:
+      - "16686:16686"   # UI
+      - "4317:4317"     # OTLP gRPC
+    networks:
+      - medipass-net
+
+networks:
+  medipass-net:
+    driver: bridge
+
+volumes:
+  pgdata_agenda:
+  pgdata_insurance:
+  mongodata:
