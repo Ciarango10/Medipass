@@ -7,7 +7,7 @@ slot_bp        = Blueprint("slots", __name__)
 
 def create_appointment_routes(appointment_use_case):
 
-    @appointment_bp.route("/")
+    @appointment_bp.route("/health")
     def health():
         return {"service": "MS-AgendaHub", "status": "running"}
 

@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Medipass - Panel de Agendamiento</title>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --secondary: #64748b;
+            --success: #22c55e;
+            --danger: #ef4444;
+            --bg: #f8fafc;
+        }
+        body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); margin: 0; padding: 20px; color: #1e293b; }
+        .container { max-width: 1000px; margin: 0 auto; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        h1, h2 { color: var(--primary); }
+        .full-width { grid-column: 1 / -1; }
+        form { display: flex; flex-direction: column; gap: 10px; }
+        input, select, button { padding: 10px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 16px; }
+        button { background: var(--primary); color: white; border: none; cursor: pointer; font-weight: bold; }
+        button:hover { opacity: 0.9; }
+        button.secondary { background: var(--secondary); }
+        .badge { padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
+        .badge-success { background: #dcfce7; color: #166534; }
+        .badge-danger { background: #fee2e2; color: #991b1b; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { text-align: left; padding: 12px; border-bottom: 1px solid #e2e8f0; }
+        .logs { background: #0f172a; color: #38bdf8; padding: 15px; border-radius: 8px; font-family: monospace; height: 200px; overflow-y: auto; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card full-width">
+            <h1>Medipass — Sistema de Agendamiento</h1>
+            <button class="secondary" onclick="seedInsurance()">1. Sembrar Pólizas (MS-Insurance)</button>
+            <p><small>Pacientes válidos: <b>P001, P002, P003</b>. P002 no tiene cobertura para quimioterapia (CHT-001).</small></p>
+        </div>
+
+        <div class="card">
+            <h2>Crear Slot Médico</h2>
+            <form id="slotForm">
+                <input type="number" id="doctor_id" placeholder="ID Doctor (ej. 1)" required>
+                <input type="text" id="doctor_name" placeholder="Nombre Doctor" required>
+                <select id="specialty">
+                    <option value="ONCOLOGY">Oncología</option>
+                    <option value="CARDIOLOGY">Cardiología</option>
+                </select>
+                <input type="datetime-local" id="slot_datetime" required>
+                <button type="submit">Crear Slot</button>
+            </form>
+        </div>
+
+        <div class="card">
+            <h2>Slots Disponibles</h2>
+            <div id="slotsList">Cargando slots...</div>
+        </div>
+
+        <div class="card full-width">
+            <h2>Agendar Cita</h2>
+            <form id="bookingForm" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px;">
+                <input type="text" id="patient_id" placeholder="ID Paciente (P001, P002...)" required>
+                <input type="text" id="patient_name" placeholder="Nombre Paciente" required>
+                <select id="procedure_code">
+                    <option value="CHT-001">Quimioterapia (CHT-001)</option>
+                    <option value="CARD-002">Ecocardiograma (CARD-002)</option>
+                </select>
+                <input type="hidden" id="selected_slot_id">
+                <input type="text" id="selected_slot_text" placeholder="Seleccione un slot de la lista" disabled style="grid-column: span 2;">
+                <button type="submit">Confirmar Cita</button>
+            </form>
+        </div>
+
+        <div class="card full-width">
+            <h2>Registro de Citas (AgendaHub)</h2>
+            <table id="appointmentsTable">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Paciente</th>
+                        <th>Doctor</th>
+                        <th>Procedimiento</th>
+                        <th>Cobertura</th>
+                        <th>Estado</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+
+        <div class="card full-width">
+            <h2>Eventos Recibidos (EHR Logger - MongoDB)</h2>
+            <div id="ehrLogs" class="logs">Esperando eventos...</div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = "";
+
+        async function seedInsurance() {
+            try {
+                const res = await fetch(`${API_BASE}/insurance/seed`, { method: 'POST' });
+                const data = await res.json();
+                log("Insurance", data.message || "Pólizas sembradas");
+            } catch (e) {
+                log("Error", "No se pudo conectar con ms-insurance.");
+            }
+        }
+
+        async function loadSlots() {
+            const res = await fetch(`${API_BASE}/slots`);
+            const slots = await res.json();
+            const container = document.getElementById('slotsList');
+            if (slots.length === 0) {
+                container.innerHTML = "No hay slots disponibles.";
+                return;
+            }
+            container.innerHTML = slots.map(s => `
+                <div style="border: 1px solid #ddd; padding: 10px; margin-bottom: 5px; border-radius: 4px; display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <strong>${s.doctor_name}</strong> (${s.specialty})<br>
+                        <small>${new Date(s.slot_datetime).toLocaleString()}</small>
+                    </div>
+                    <button class="secondary" onclick="selectSlot(${s.id}, '${s.doctor_name}', ${s.doctor_id})">Seleccionar</button>
+                </div>
+            `).join('');
+        }
+
+        function selectSlot(id, name, doctorId) {
+            document.getElementById('selected_slot_id').value = id;
+            document.getElementById('selected_slot_text').value = `Slot #${id} - Dr. ${name}`;
+            window.currentDoctorId = doctorId;
+        }
+
+        document.getElementById('slotForm').onsubmit = async (e) => {
+            e.preventDefault();
+            const body = {
+                doctor_id: document.getElementById('doctor_id').value,
+                doctor_name: document.getElementById('doctor_name').value,
+                specialty: document.getElementById('specialty').value,
+                slot_datetime: document.getElementById('slot_datetime').value
+            };
+            await fetch(`${API_BASE}/slots`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            log("AgendaHub", "Slot creado con éxito");
+            loadSlots();
+        };
+
+        document.getElementById('bookingForm').onsubmit = async (e) => {
+            e.preventDefault();
+            const slotId = document.getElementById('selected_slot_id').value;
+            if (!slotId) return alert("Seleccione un slot primero");
+
+            const body = {
+                patient_id: document.getElementById('patient_id').value,
+                patient_name: document.getElementById('patient_name').value,
+                procedure_code: document.getElementById('procedure_code').value,
+                doctor_id: window.currentDoctorId,
+                slot_id: parseInt(slotId)
+            };
+
+            const res = await fetch(`${API_BASE}/appointments`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const data = await res.json();
+            
+            if (res.ok) {
+                log("Success", "Cita agendada correctamente");
+                loadAppointments();
+                loadSlots();
+            } else {
+                log("Error", data.error || "Error desconocido");
+            }
+        };
+
+        async function loadAppointments() {
+            const patientId = document.getElementById('patient_id').value;
+            if (!patientId) return;
+            const res = await fetch(`${API_BASE}/appointments/patient/${patientId}`);
+            const appts = await res.json();
+            const tbody = document.querySelector('#appointmentsTable tbody');
+            tbody.innerHTML = appts.map(a => `
+                <tr>
+                    <td>${a.id}</td>
+                    <td>${a.patient_name}</td>
+                    <td>ID: ${a.doctor_id}</td>
+                    <td>${a.procedure_code}</td>
+                    <td><span class="badge ${a.coverage_status === 'COVERED' ? 'badge-success' : 'badge-danger'}">${a.coverage_status}</span></td>
+                    <td>${a.status}</td>
+                </tr>
+            `).join('');
+        }
+
+        function log(source, msg) {
+            const div = document.getElementById('ehrLogs');
+            const time = new Date().toLocaleTimeString();
+            div.innerHTML = `[${time}] [${source}] ${msg}\n` + div.innerHTML;
+        }
+
+        // Poll for EHR history (simulating real-time updates from MongoDB)
+        setInterval(async () => {
+            const patientId = document.getElementById('patient_id').value;
+            if (!patientId) return;
+            // Note: In a real app we'd call EHRLogger through a gateway, 
+            // here we'll just refresh appointments as a proxy for success.
+            loadAppointments();
+        }, 5000);
+
+        loadSlots();
+    </script>
+</body>
+</html>

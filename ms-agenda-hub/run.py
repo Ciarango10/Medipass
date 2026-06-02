@@ -4,6 +4,7 @@ from app.application.use_cases.appointment_service import AppointmentService, Do
 from app.infrastructure.adapters.input.appointment_controller import (
     create_appointment_routes, create_slot_routes,
 )
+from app.infrastructure.adapters.input.ui_controller import create_ui_routes
 from app.infrastructure.adapters.output.persistence.appointment_repository_sqlalchemy import (
     AppointmentRepositorySQLAlchemy,
 )
@@ -40,6 +41,7 @@ def create_app():
 
     app.register_blueprint(create_appointment_routes(appointment_service))
     app.register_blueprint(create_slot_routes(slot_service))
+    app.register_blueprint(create_ui_routes())
 
     return app
 
